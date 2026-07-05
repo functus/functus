@@ -1,6 +1,29 @@
 ---
 name: jj-commit
-description: jj (Jujutsu) によるマイクロコミットを行う。現在の変更に Conventional Commits 形式 + 実装経緯を含む description を付け、jj new で次の変更を開始する。作業の区切り・機能単位の完成時・ユーザーがコミットを指示した時に使用する。
+description: jj (Jujutsu) によるマイクロコミットを行う。現在の変更に Conventional Commits 形式 + 実装経緯を含む description を付け、jj new で次の変更を開始する。
+when_to_use: |
+  作業の区切りごと、1つの論理的変更が完成した時に使う。特に:
+  - TDD の Refactor が完了し cargo test が Green になった直後
+  - ユーザーが「コミットして」「jj でまとめて」「区切って」「description つけて」と言った時
+  - /jj-review でのレビュー対応が完了した直後
+allowed-tools:
+  - Bash(jj st:*)
+  - Bash(jj diff:*)
+  - Bash(jj split:*)
+  - Bash(jj desc:*)
+  - Bash(jj describe:*)
+  - Bash(jj new:*)
+  - Bash(cargo fmt:*)
+  - Bash(cargo clippy:*)
+  - Bash(cargo test:*)
+disallowed-tools:
+  - AskUserQuestion
+model: inherit
+effort: medium
+# context: 未設定 (インライン実行)。直前のターンで何を実装したかという会話履歴を
+#          参照して「経緯」を書く必要があるため、履歴を持たない fork サブエージェントにはしない。
+# paths: 未設定。特定のファイル種別に紐付かない全リポジトリ横断のワークフローのため、
+#        Glob によるファイル種別限定は行わない(常にどの変更にも適用されうる)。
 ---
 
 # jj マイクロコミット

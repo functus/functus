@@ -1,6 +1,20 @@
 ---
 name: jj-review
-description: 現在の jj 変更(または指定リビジョン)に対して rust-reviewer SubAgent による品質重視のコードレビューを実行する。コミット前・PR 作成前・ユーザーがレビューを求めた時に使用する。
+description: 現在の jj 変更(または指定リビジョン)に対して rust-reviewer SubAgent による品質重視のコードレビューを実行する。
+when_to_use: |
+  コミット前・PR 作成前に使う。特に:
+  - Rust コードを含む jj change の description を付ける直前 (/jj-commit の前段)
+  - ユーザーが「レビューして」「rust-reviewer で見て」「品質チェックして」と言った時
+allowed-tools:
+  - Bash(jj diff:*)
+  - Agent(rust-reviewer)
+disallowed-tools:
+  - AskUserQuestion
+model: inherit
+effort: high
+# context: 未設定 (インライン実行)。レビュー後の Critical/High 指摘の修正 (Edit) を
+#          同一セッションで継続する必要があるため、会話履歴を持たない fork にはしない。
+# paths: 未設定。変更されたファイルの種類を問わず、jj change 全体を対象にするため。
 ---
 
 # jj 変更のコードレビュー
