@@ -7,6 +7,7 @@
 @.claude/rules/workspace-layout.md
 @.claude/rules/coding-standards.md
 @.claude/rules/tdd.md
+@.claude/rules/code-review-response.md
 
 ## バージョン管理: jj (Jujutsu)
 

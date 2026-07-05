@@ -79,6 +79,7 @@
   },
   "permissions": {
     "allow": [
+      "Bash(git log:*)",
       "Bash(jj st:*)",
       "Bash(jj status:*)",
       "Bash(jj diff:*)",
