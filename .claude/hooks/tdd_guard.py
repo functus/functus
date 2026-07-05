@@ -14,9 +14,11 @@ import subprocess
 import sys
 
 # コメントと実装を一致させる: #[test] 系属性、proptest!、#[cfg(test)] mod tests のいずれかを
-# テストの追加・変更とみなす。
+# テストの追加・変更とみなす。追加行 (+) だけでなく削除行 (-) とコンテキスト行 (先頭が空白) も
+# 対象にする。既存テストの本文だけを書き換える(#[test] 行自体には触れない)変更でも、
+# diff のハンク内にその #[test] 行がコンテキストとして含まれていれば検出できるようにするため。
 TEST_MARKERS = re.compile(
-    r"^\+.*("
+    r"("
     r"#\[(tokio::)?test\]"
     r"|#\[rstest\]"
     r"|#\[cfg\(test\)\]"
@@ -24,6 +26,13 @@ TEST_MARKERS = re.compile(
     r"|mod\s+tests\b"
     r")"
 )
+
+# diff のハンク本文行 (+/-/コンテキスト) かどうかを判定する。
+# `+++`/`---` のファイルヘッダ行は除外する。
+def is_hunk_body_line(line: str) -> bool:
+    if not line or line.startswith("+++") or line.startswith("---"):
+        return False
+    return line[0] in ("+", "-", " ")
 
 VIOLATION_MESSAGE = """TDD 違反: src/ の Rust コードが変更されていますが、テストの追加・変更がありません。
 Red → Green → Refactor に従ってください:
@@ -68,8 +77,14 @@ def main() -> int:
 
     test_files = [f for f in files if re.search(r"(^|/)tests/.*\.rs$", f)]
 
-    git_diff = run(root, ["jj", "diff", "--git"]).stdout
-    has_test_diff = any(TEST_MARKERS.search(line) for line in git_diff.splitlines())
+    # コンテキスト行を広めに取り、既存テスト本文の変更でも #[test] 属性行が
+    # 同じハンクに含まれやすくする。
+    git_diff = run(root, ["jj", "diff", "--git", "--context", "20"]).stdout
+    has_test_diff = any(
+        TEST_MARKERS.search(line[1:])
+        for line in git_diff.splitlines()
+        if is_hunk_body_line(line)
+    )
 
     if not test_files and not has_test_diff:
         print(VIOLATION_MESSAGE, file=sys.stderr)

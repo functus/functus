@@ -97,14 +97,18 @@ def get_description(root: str, change_id: str) -> str:
     return result.stdout
 
 
-def sync_note(root: str, commit_id: str, note_text: str) -> None:
+def sync_note(root: str, commit_id: str, note_text: str) -> bool:
+    """note の追加に成功したら True を返す。呼び出し側はこれを見てからでないと
+    state 更新・旧 commit からの note 削除を行ってはならない
+    (失敗時に「同期済み」と誤記録すると、以降そのズレが放置されてしまうため)。
+    """
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".txt", delete=False, encoding="utf-8"
     ) as tmp:
         tmp.write(note_text)
         tmp_path = tmp.name
     try:
-        run(
+        result = run(
             root,
             [
                 "git",
@@ -119,13 +123,15 @@ def sync_note(root: str, commit_id: str, note_text: str) -> None:
         )
     finally:
         os.unlink(tmp_path)
+    return result.returncode == 0
 
 
-def remove_note(root: str, commit_id: str) -> None:
-    run(
+def remove_note(root: str, commit_id: str) -> bool:
+    result = run(
         root,
         ["git", "notes", f"--ref={NOTES_REF}", "remove", "--ignore-missing", commit_id],
     )
+    return result.returncode == 0
 
 
 def main() -> int:
@@ -155,7 +161,11 @@ def main() -> int:
             continue  # commit_id が前回と同じ = すでに正しい commit に note 済み
 
         note_text = get_description(root, change_id)
-        sync_note(root, commit_id, note_text)
+        if not sync_note(root, commit_id, note_text):
+            # 新しい commit への note 付与に失敗した場合は、旧 note の削除も
+            # state の更新も行わない。次回の Stop で同じ commit_id に対して
+            # 再試行されるようにする(誤って「同期済み」と記録しない)。
+            continue
 
         if prev is not None and prev.get("commit_id") not in (None, commit_id):
             remove_note(root, prev["commit_id"])
