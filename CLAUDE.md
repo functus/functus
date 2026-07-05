@@ -8,6 +8,7 @@
 @.claude/rules/coding-standards.md
 @.claude/rules/tdd.md
 @.claude/rules/code-review-response.md
+@.claude/rules/git-notes.md
 
 ## バージョン管理: jj (Jujutsu)
 
