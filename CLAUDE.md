@@ -2,6 +2,12 @@
 
 圏論の概念でコード品質を担保するコード生成ツール群。全体設計は `docs/DESIGN.md` を参照。
 
+## Rules(必読)
+
+@.claude/rules/workspace-layout.md
+@.claude/rules/coding-standards.md
+@.claude/rules/tdd.md
+
 ## バージョン管理: jj (Jujutsu)
 
 このリポジトリは **jj の colocated リポジトリ**。git の履歴操作(`git commit` / `checkout` / `rebase` 等)は使わない(hook でブロックされる)。閲覧系の `git log` 等は可。
