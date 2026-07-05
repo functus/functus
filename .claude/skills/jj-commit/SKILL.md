@@ -18,7 +18,9 @@ allowed-tools:
   - Bash(cargo test:*)
 disallowed-tools:
   - AskUserQuestion
-model: inherit
+# model: haiku — 会話中で既に固まった内容を Conventional Commits 形式に整形する
+#                 頻出・低リスクな作業のため、高速・低コストな haiku で十分
+model: haiku
 effort: medium
 # context: 未設定 (インライン実行)。直前のターンで何を実装したかという会話履歴を
 #          参照して「経緯」を書く必要があるため、履歴を持たない fork サブエージェントにはしない。

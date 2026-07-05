@@ -10,7 +10,10 @@ allowed-tools:
   - Agent(rust-reviewer)
 disallowed-tools:
   - AskUserQuestion
-model: inherit
+# model: sonnet — 深い正しさ判定は rust-reviewer (model: opus) に委譲するため、
+#                  このスキル自身は diff 取得・Agent 起動・指摘に基づく修正の
+#                  適用/報告という調整役に徹する。opus ほどのコストは不要
+model: sonnet
 effort: high
 # context: 未設定 (インライン実行)。レビュー後の Critical/High 指摘の修正 (Edit) を
 #          同一セッションで継続する必要があるため、会話履歴を持たない fork にはしない。
