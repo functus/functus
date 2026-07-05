@@ -1,3 +1,6 @@
+<!-- paths は意図的に未設定: 特定のファイル種別ではなく git notes という機構そのものの
+     説明であり、ファイル Glob でのスコープ対象がなく無条件読み込みのままにする -->
+
 # git notes による実装経緯の記録
 
 Change description(Conventional Commits + 「## 経緯」「## 実装内容」)は、jj の操作

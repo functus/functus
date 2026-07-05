@@ -1,3 +1,11 @@
+---
+paths:
+  - "Cargo.toml"
+  - "**/Cargo.toml"
+  - "crates/**"
+  - "**/*.rs"
+---
+
 # Workspace レイアウトとディレクトリの役割
 
 functus は Cargo workspace で開発する。各ディレクトリの役割と依存方向は以下の通り。

@@ -2,13 +2,10 @@
 
 圏論の概念でコード品質を担保するコード生成ツール群。全体設計は `docs/DESIGN.md` を参照。
 
-## Rules(必読)
-
-@.claude/rules/workspace-layout.md
-@.claude/rules/coding-standards.md
-@.claude/rules/tdd.md
-@.claude/rules/code-review-response.md
-@.claude/rules/git-notes.md
+詳細な規約は `.claude/rules/` 配下に分割してある(workspace-layout / coding-standards / tdd は
+`paths` フロントマターにより該当ファイルを操作する時だけ読み込まれる。code-review-response /
+git-notes はファイル種別に紐付かないため無条件読み込み)。`@import` はしない — `.claude/rules/`
+は Claude Code が自動的に検出するため、CLAUDE.md から明示的に読み込む必要はない。
 
 ## バージョン管理: jj (Jujutsu)
 
