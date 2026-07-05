@@ -13,6 +13,10 @@ target
 # Contains mutation testing data
 **/mutants.out*/
 
+# Claude Code ハーネスのローカル状態 (change_id <-> commit_id の対応表など)
+# git notes の同期用キャッシュであり、共有すべき成果物は git notes 自体の方
+.claude/state/
+
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
