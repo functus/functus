@@ -60,8 +60,9 @@ pub enum CategoryError {
         missing: ObjectId,
     },
 
-    /// `compose(f, g)` で `f` と `g` の双方が異なる効果を持ち、どちらの効果を
-    /// 採用すべきか一意に決まらない。
+    /// `compose(f, g)` で `f` と `g` の双方が異なる効果を持つ。Kleisli 圏の bind は
+    /// 同一モナドの下でのみ定義されるため、異なるモナドを跨ぐ合成(lift)なしには
+    /// 一意な効果を決定できない。
     #[error("合成できない: `{f}` の効果 `{f_effects}` と `{g}` の効果 `{g_effects}` が異なる")]
     IncompatibleEffects {
         /// 合成の左側の射。
@@ -468,13 +469,26 @@ mod tests {
         let get_user = category
             .add_effectful_primitive_morphism(
                 "getUser",
-                user_id,
-                user,
-                EffectStack::wrapping(vec![Effect::Async, Effect::Fallible { error: api_error }]),
+                user_id.clone(),
+                user.clone(),
+                EffectStack::wrapping(vec![
+                    Effect::Async,
+                    Effect::Fallible {
+                        error: api_error.clone(),
+                    },
+                ]),
             )
             .unwrap();
 
         let morphism = category.morphism(&get_user).unwrap();
+        // IR の構造そのもの(域・余域・効果の層)を検証する。書式(render の出力文字列)は
+        // effect.rs の render_nests_outer_to_inner が別途担当する。
+        assert_eq!(morphism.dom, user_id);
+        assert_eq!(morphism.cod, user);
+        assert_eq!(
+            morphism.effects.layers(),
+            &[Effect::Async, Effect::Fallible { error: api_error }]
+        );
         assert_eq!(
             morphism.effects.render(&morphism.cod),
             "Async<Result<User, ApiError>>"
