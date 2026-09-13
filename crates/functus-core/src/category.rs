@@ -74,6 +74,37 @@ pub enum CategoryError {
         /// `g` の効果。
         g_effects: EffectStack,
     },
+
+    /// `LawChecker` の余積網羅性チェックに渡された対象が余積ではない。
+    #[error("対象 `{0}` は余積ではない")]
+    NotACoproduct(ObjectId),
+
+    /// 余積の一部のバリアントを消費する基本射が1つも登録されていない。
+    /// 処理する射がないバリアントは、生成コードの `match` が網羅的にならない。
+    #[error(
+        "余積 `{coproduct}` の次のバリアントを消費する基本射が登録されていない(生成コードの match が \
+         網羅的にならない): {}",
+        .missing_variants.join(", ")
+    )]
+    UnhandledCoproductVariants {
+        /// 検証対象の余積。
+        coproduct: ObjectId,
+        /// 処理する射が見つからなかったバリアント名。
+        missing_variants: Vec<String>,
+    },
+
+    /// 余積の複数のバリアントが同じペイロード対象を共有しており、
+    /// どのバリアントが処理されたかを一意に判定できない。
+    #[error(
+        "余積 `{coproduct}` の複数のバリアントが対象 `{payload}` を共有しているため、\
+         どのバリアントが処理されたか判定できない"
+    )]
+    AmbiguousCoproductVariants {
+        /// 検証対象の余積。
+        coproduct: ObjectId,
+        /// 複数のバリアントに共有されているペイロード対象。
+        payload: ObjectId,
+    },
 }
 
 /// 対象と射の集まり。合成は既存の射から新しい射を導出し、圏に登録する。
@@ -130,6 +161,13 @@ impl Category {
     /// 登録済みの射を参照する。
     pub fn morphism(&self, id: &MorphismId) -> Option<&Morphism> {
         self.morphisms.get(id)
+    }
+
+    /// 登録済みの射をすべて走査する。順序は不定で、`MorphismId::Identity` /
+    /// `MorphismId::Composed` (`identity` / `compose` が生成した派生射)も含まれる。
+    /// 基本射だけを見たい場合は呼び出し側で `MorphismId::Named` に絞り込むこと。
+    pub fn morphisms(&self) -> impl Iterator<Item = &Morphism> {
+        self.morphisms.values()
     }
 
     /// フロントエンド・DSL 由来の、効果を持たない基本射を登録する。
@@ -212,19 +250,11 @@ impl Category {
     ///
     /// # Errors
     ///
-    /// `f` / `g` が未登録の場合、または `f` の余域と `g` の域が一致しない場合に失敗する。
+    /// `f` / `g` が未登録の場合、`f` の余域と `g` の域が一致しない場合、
+    /// または `f` と `g` の効果が非互換な場合に失敗する
+    /// (`resolve_composition` の `# Errors` を参照)。
     pub fn compose(&mut self, f: &MorphismId, g: &MorphismId) -> Result<MorphismId, CategoryError> {
-        let f_morphism = self.require_morphism(f)?;
-        let g_morphism = self.require_morphism(g)?;
-
-        if f_morphism.cod != g_morphism.dom {
-            return Err(CategoryError::DomCodMismatch {
-                f: f.clone(),
-                f_cod: f_morphism.cod.clone(),
-                g: g.clone(),
-                g_dom: g_morphism.dom.clone(),
-            });
-        }
+        let (dom, cod, effects) = self.resolve_composition(f, g)?;
 
         if matches!(f, MorphismId::Identity(_)) {
             return Ok(g.clone());
@@ -232,10 +262,6 @@ impl Category {
         if matches!(g, MorphismId::Identity(_)) {
             return Ok(f.clone());
         }
-
-        let effects = merge_effects(f, &f_morphism.effects, g, &g_morphism.effects)?;
-        let dom = f_morphism.dom.clone();
-        let cod = g_morphism.cod.clone();
 
         let mut parts = Vec::new();
         extend_with_parts(&mut parts, f);
@@ -251,6 +277,37 @@ impl Category {
                 effects,
             });
         Ok(id)
+    }
+
+    /// `compose(f, g)` が成立するかを、実際には合成射を登録せずに判定する。
+    ///
+    /// `compose` と `LawChecker::check_composable` の唯一の実装であり、
+    /// 二つの入口が異なる基準で判定してしまう(事前チェックは通るのに
+    /// 実際の合成は効果の不一致で失敗する、など)事態を防ぐ。
+    ///
+    /// # Errors
+    ///
+    /// `f` / `g` が未登録の場合、`f` の余域と `g` の域が一致しない場合、
+    /// または `f` と `g` の効果が非互換な場合に失敗する。
+    pub(crate) fn resolve_composition(
+        &self,
+        f: &MorphismId,
+        g: &MorphismId,
+    ) -> Result<(ObjectId, ObjectId, EffectStack), CategoryError> {
+        let f_morphism = self.require_morphism(f)?;
+        let g_morphism = self.require_morphism(g)?;
+
+        if f_morphism.cod != g_morphism.dom {
+            return Err(CategoryError::DomCodMismatch {
+                f: f.clone(),
+                f_cod: f_morphism.cod.clone(),
+                g: g.clone(),
+                g_dom: g_morphism.dom.clone(),
+            });
+        }
+
+        let effects = merge_effects(f, &f_morphism.effects, g, &g_morphism.effects)?;
+        Ok((f_morphism.dom.clone(), g_morphism.cod.clone(), effects))
     }
 
     fn require_object(&self, id: &ObjectId) -> Result<(), CategoryError> {
