@@ -3,22 +3,87 @@
 git commit / checkout 等の履歴改変系 git コマンドをブロックして jj へ誘導する。
 """
 import json
+import os
 import re
+import shlex
 import sys
 
-# git サブコマンドの前に `-C <dir>` や `-c key=val` 等のグローバルオプションが
-# 挟まるケースも許容するため、`git` の後ろは任意個数のオプション+引数を許す。
-BLOCKED_SUBCOMMANDS = r"(commit|checkout|switch|rebase|merge|cherry-pick|reset|stash)"
-GIT_OPTION = r"(?:-[A-Za-z]|--[A-Za-z][A-Za-z-]*)(?:[=\s]\S+)?"
-PATTERN = re.compile(
-    r"(^|[;&|]|\s)git(?:\s+" + GIT_OPTION + r")*\s+" + BLOCKED_SUBCOMMANDS + r"(\s|$)"
-)
+BLOCKED_SUBCOMMANDS = {
+    "commit", "checkout", "switch", "rebase", "merge", "cherry-pick", "reset", "revert", "stash"
+}
+OPTIONS_WITH_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"}
 
 GUIDANCE = """このリポジトリは jj (Jujutsu) で管理しています。git の履歴操作は使わず、以下を使ってください:
   - 変更の記述: jj desc -m "type(scope): 説明"  (Conventional Commits + 経緯を本文に)
   - 新しい変更の開始 (マイクロコミット): jj new
   - ブランチ操作: jj bookmark / jj edit / jj split
 詳細は /jj-commit スキルを参照してください。"""
+
+
+def contains_blocked_git_command(command: str) -> bool:
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|()")
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        tokens = list(lexer)
+    except ValueError:
+        # 壊れた引用符のコマンドは Bash 自身が実行できない。
+        return False
+
+    variables: dict[str, str] = {}
+    command_position = True
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token in {";", "&", "&&", "|", "||", "("}:
+            command_position = True
+            index += 1
+            continue
+        if token == ")":
+            command_position = False
+            index += 1
+            continue
+        if command_position and re.fullmatch(r"[A-Za-z_]\w*=.*", token):
+            name, value = token.split("=", 1)
+            variables[name] = value
+            index += 1
+            continue
+        if not command_position:
+            index += 1
+            continue
+
+        executable = variables.get(token[1:], token) if token.startswith("$") else token
+        if executable in {"bash", "sh", "zsh"} and index + 2 < len(tokens) and tokens[index + 1] == "-c":
+            if contains_blocked_git_command(tokens[index + 2]):
+                return True
+        if executable == "eval" and index + 1 < len(tokens):
+            if contains_blocked_git_command(" ".join(tokens[index + 1:])):
+                return True
+        if os.path.basename(executable) != "git":
+            command_position = False
+            index += 1
+            continue
+
+        cursor = index + 1
+        while cursor < len(tokens):
+            candidate = tokens[cursor]
+            if candidate == "--":
+                cursor += 1
+                break
+            option = candidate.split("=", 1)[0]
+            if not candidate.startswith("-"):
+                break
+            cursor += 1
+            if option in OPTIONS_WITH_VALUE and "=" not in candidate:
+                cursor += 1
+        if cursor < len(tokens):
+            candidate = tokens[cursor]
+            candidate = variables.get(candidate[1:], candidate) if candidate.startswith("$") else candidate
+        if cursor < len(tokens) and candidate in BLOCKED_SUBCOMMANDS:
+            return True
+        command_position = False
+        index = cursor
+    return False
 
 
 def main() -> int:
@@ -31,7 +96,7 @@ def main() -> int:
         return 0
 
     command = payload.get("tool_input", {}).get("command", "") or ""
-    if PATTERN.search(command):
+    if contains_blocked_git_command(command):
         print(GUIDANCE, file=sys.stderr)
         return 2
 

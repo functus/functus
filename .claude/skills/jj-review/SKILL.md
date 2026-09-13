@@ -7,9 +7,10 @@ when_to_use: |
   - ユーザーが「レビューして」「rust-reviewer で見て」「品質チェックして」と言った時
 allowed-tools:
   - Bash(jj diff:*)
+  - Bash(cargo clippy:*)
+  - Bash(cargo test:*)
+  - Edit
   - Agent(rust-reviewer)
-disallowed-tools:
-  - AskUserQuestion
 # model: sonnet — 深い正しさ判定は rust-reviewer (model: opus) に委譲するため、
 #                  このスキル自身は diff 取得・Agent 起動・指摘に基づく修正の
 #                  適用/報告という調整役に徹する。opus ほどのコストは不要
@@ -17,7 +18,8 @@ model: sonnet
 effort: high
 # context: 未設定 (インライン実行)。レビュー後の Critical/High 指摘の修正 (Edit) を
 #          同一セッションで継続する必要があるため、会話履歴を持たない fork にはしない。
-# paths: 未設定。変更されたファイルの種類を問わず、jj change 全体を対象にするため。
+# paths: 未設定。jj change 全体を対象にするため。Rust/Cargo 変更がない場合は
+#        rust-reviewer と Cargo コマンドを起動せず、文書・設定差分を直接レビューする。
 ---
 
 # jj 変更のコードレビュー
@@ -33,10 +35,11 @@ effort: high
    ```
    変更が空の場合は「レビュー対象がない」と報告して終了する。
 
-2. **rust-reviewer SubAgent を起動**
+2. **Rust/Cargo 変更の場合のみ rust-reviewer SubAgent を起動**
    Agent ツールで `rust-reviewer` を起動し、以下を伝える:
    - レビュー対象リビジョン(既定は `@`)
    - 変更の目的(対応中の Issue 番号・機能名)
+   Rust/Cargo 変更がない場合は、メインセッションで文書・設定の整合性を直接確認する。
 
 3. **指摘への対応**
    - Critical / High の指摘: 必ず修正する

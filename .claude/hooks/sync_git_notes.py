@@ -23,6 +23,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from typing import Optional
 
 NOTES_REF = "refs/notes/functus-rationale"
 STATE_REL_PATH = os.path.join(".claude", "state", "git-notes-map.json")
@@ -57,8 +58,8 @@ def save_state(root: str, state: dict) -> None:
 
 
 def list_described_mutable_changes(root: str) -> list[tuple[str, str]]:
-    """記述済み (description が空でない) かつ mutable (書き換えられうる) な
-    change の (change_id, commit_id) 一覧を返す。immutable になった change は
+    """mutable (書き換えられうる) な change の (change_id, commit_id) 一覧を返す。
+    description を消した change も返し、呼び出し側で stale note を削除する。immutable になった change は
     commit_id がもう変わらないため対象から外し、同期コストを抑える。
     """
     template = f'change_id ++ "{FIELD_SEP}" ++ commit_id ++ "{RECORD_SEP}"'
@@ -68,7 +69,7 @@ def list_described_mutable_changes(root: str) -> list[tuple[str, str]]:
             "jj",
             "log",
             "-r",
-            'mutable() ~ description(exact:"")',
+            "mutable()",
             "--no-graph",
             "-T",
             template,
@@ -89,12 +90,12 @@ def list_described_mutable_changes(root: str) -> list[tuple[str, str]]:
     return pairs
 
 
-def get_description(root: str, change_id: str) -> str:
+def get_description(root: str, change_id: str) -> Optional[str]:
     result = run(
         root,
         ["jj", "log", "-r", change_id, "--no-graph", "-T", "description"],
     )
-    return result.stdout
+    return result.stdout if result.returncode == 0 else None
 
 
 def sync_note(root: str, commit_id: str, note_text: str) -> bool:
@@ -149,7 +150,9 @@ def main() -> int:
         return 0
     if not os.path.isdir(os.path.join(root, ".jj")):
         return 0
-    if not os.path.isdir(os.path.join(root, ".git")):
+    # linked worktree では .git はディレクトリではなくファイルになる。
+    # ファイルシステム上の形状ではなく git 自身に判定させる。
+    if run(root, ["git", "rev-parse", "--git-dir"]).returncode != 0:
         return 0
 
     state = load_state(root)
@@ -157,10 +160,17 @@ def main() -> int:
 
     for change_id, commit_id in list_described_mutable_changes(root):
         prev = state.get(change_id)
+        note_text = get_description(root, change_id)
+        if note_text is None:
+            continue
+        if not note_text.strip():
+            if prev is not None and remove_note(root, prev.get("commit_id", commit_id)):
+                state.pop(change_id, None)
+                changed = True
+            continue
         if prev is not None and prev.get("commit_id") == commit_id:
             continue  # commit_id が前回と同じ = すでに正しい commit に note 済み
 
-        note_text = get_description(root, change_id)
         if not sync_note(root, commit_id, note_text):
             # 新しい commit への note 付与に失敗した場合は、旧 note の削除も
             # state の更新も行わない。次回の Stop で同じ commit_id に対して
@@ -168,7 +178,9 @@ def main() -> int:
             continue
 
         if prev is not None and prev.get("commit_id") not in (None, commit_id):
-            remove_note(root, prev["commit_id"])
+            if not remove_note(root, prev["commit_id"]):
+                # state を進めず、次回の Stop で古い note の削除を再試行する。
+                continue
 
         state[change_id] = {"commit_id": commit_id}
         changed = True

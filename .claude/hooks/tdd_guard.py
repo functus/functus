@@ -12,27 +12,134 @@ import re
 import shutil
 import subprocess
 import sys
+from typing import Optional
 
 # コメントと実装を一致させる: #[test] 系属性、proptest!、#[cfg(test)] mod tests のいずれかを
-# テストの追加・変更とみなす。追加行 (+) だけでなく削除行 (-) とコンテキスト行 (先頭が空白) も
-# 対象にする。既存テストの本文だけを書き換える(#[test] 行自体には触れない)変更でも、
-# diff のハンク内にその #[test] 行がコンテキストとして含まれていれば検出できるようにするため。
+# テストの追加・削除とみなす。diff のコンテキスト行は対象にしない。
+# 近くに既存の #[test] があるだけの実装変更を「テスト変更あり」と
+# 誤判定しないため。既存テストの本文だけを変更する場合は tests/ 配下に置くか、
+# [skip-tdd] で意図を明示する。
 TEST_MARKERS = re.compile(
     r"("
     r"#\[(tokio::)?test\]"
     r"|#\[rstest\]"
     r"|#\[cfg\(test\)\]"
-    r"|proptest!\s*\("
+    r"|proptest!\s*[({]"
     r"|mod\s+tests\b"
     r")"
 )
 
-# diff のハンク本文行 (+/-/コンテキスト) かどうかを判定する。
-# `+++`/`---` のファイルヘッダ行は除外する。
-def is_hunk_body_line(line: str) -> bool:
-    if not line or line.startswith("+++") or line.startswith("---"):
-        return False
-    return line[0] in ("+", "-", " ")
+def is_changed_hunk_line(line: str) -> bool:
+    """diff の実際の追加・削除行かどうかを判定する。"""
+    return bool(line) and line[0] in ("+", "-") and not line.startswith(("+++", "---"))
+
+
+class RustTestScope:
+    """Rust の test 属性に続くブロック内かを追跡する軽量スキャナ。"""
+
+    def __init__(self) -> None:
+        self.depth = 0
+        self.test_depths: list[int] = []
+        self.pending_test = False
+        self.in_block_comment = False
+        self.quote: Optional[str] = None
+        self.raw_end: Optional[str] = None
+
+    def code_only(self, source: str) -> str:
+        """文字列・行コメント・ブロックコメントの内側を空白化する。"""
+        result: list[str] = []
+        index = 0
+        escaped = False
+        while index < len(source):
+            pair = source[index:index + 2]
+            char = source[index]
+            if self.in_block_comment:
+                if pair == "*/":
+                    self.in_block_comment = False
+                    index += 2
+                else:
+                    index += 1
+                continue
+            if self.raw_end:
+                end = source.find(self.raw_end, index)
+                if end < 0:
+                    return "".join(result)
+                index = end + len(self.raw_end)
+                self.raw_end = None
+                continue
+            if self.quote:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == self.quote:
+                    self.quote = None
+                index += 1
+                continue
+            if pair == "//":
+                break
+            if pair == "/*":
+                self.in_block_comment = True
+                index += 2
+                continue
+            raw = re.match(r'r(#+)?"', source[index:])
+            if raw:
+                hashes = raw.group(1) or ""
+                self.raw_end = '"' + hashes
+                index += len(raw.group(0))
+                continue
+            if char == '"' or (char == "'" and re.match(r"'(?:\\.|[^\\'])'", source[index:])):
+                self.quote = char
+                index += 1
+                continue
+            result.append(char)
+            index += 1
+        return "".join(result)
+
+    def feed(self, source: str) -> bool:
+        source = self.code_only(source)
+        was_in_test = bool(self.test_depths)
+        marker = bool(TEST_MARKERS.search(source))
+        if marker:
+            self.pending_test = True
+        opens = source.count("{")
+        closes = source.count("}")
+        if self.pending_test and opens:
+            self.test_depths.append(self.depth + 1)
+            self.pending_test = False
+        elif self.pending_test and ";" in source:
+            # `#[cfg(test)] mod tests;` は外部モジュール宣言で、後続ブロックはテストではない。
+            self.pending_test = False
+        self.depth += opens - closes
+        while self.test_depths and self.depth < self.test_depths[-1]:
+            self.test_depths.pop()
+        return marker or was_in_test or bool(self.test_depths)
+
+
+def has_test_changes(git_diff: str) -> bool:
+    old_scope = RustTestScope()
+    new_scope = RustTestScope()
+    is_rust_file = False
+    for line in git_diff.splitlines():
+        if line.startswith("diff --git "):
+            old_scope, new_scope = RustTestScope(), RustTestScope()
+            is_rust_file = line.rsplit(" b/", 1)[-1].endswith(".rs")
+            continue
+        if not is_rust_file:
+            continue
+        if not line or line.startswith(("+++", "---", "@@")):
+            continue
+        prefix, source = line[0], line[1:]
+        if prefix == " ":
+            old_scope.feed(source)
+            new_scope.feed(source)
+        elif prefix == "-":
+            if old_scope.feed(source):
+                return True
+        elif prefix == "+":
+            if new_scope.feed(source):
+                return True
+    return False
 
 VIOLATION_MESSAGE = """TDD 違反: src/ の Rust コードが変更されていますが、テストの追加・変更がありません。
 Red → Green → Refactor に従ってください:
@@ -63,30 +170,24 @@ def main() -> int:
         return 0
 
     desc = run(root, ["jj", "log", "-r", "@", "--no-graph", "-T", "description"]).stdout
-    if "[skip-tdd]" in desc:
-        return 0
+    skip_test_change_check = "[skip-tdd]" in desc
 
     name_only = run(root, ["jj", "diff", "--name-only"]).stdout
     files = [line for line in name_only.splitlines() if line.strip()]
     if not files:
         return 0
 
-    src_changed = [f for f in files if re.search(r"(^|/)src/.*\.rs$", f)]
-    if not src_changed:
+    rust_changed = [f for f in files if f.endswith(".rs")]
+    src_changed = [f for f in rust_changed if re.search(r"(^|/)src/.*\.rs$", f)]
+    test_files = [f for f in files if re.search(r"(^|/)tests/.*\.rs$", f)]
+    if not rust_changed:
         return 0
 
-    test_files = [f for f in files if re.search(r"(^|/)tests/.*\.rs$", f)]
+    # test スコープを追跡できるよう、変更ファイルの全コンテキストを取得する。
+    git_diff = run(root, ["jj", "diff", "--git", "--context", "100000"]).stdout
+    has_test_diff = has_test_changes(git_diff)
 
-    # コンテキスト行を広めに取り、既存テスト本文の変更でも #[test] 属性行が
-    # 同じハンクに含まれやすくする。
-    git_diff = run(root, ["jj", "diff", "--git", "--context", "20"]).stdout
-    has_test_diff = any(
-        TEST_MARKERS.search(line[1:])
-        for line in git_diff.splitlines()
-        if is_hunk_body_line(line)
-    )
-
-    if not test_files and not has_test_diff:
+    if src_changed and not skip_test_change_check and not (test_files or has_test_diff):
         print(VIOLATION_MESSAGE, file=sys.stderr)
         return 2
 

@@ -16,8 +16,6 @@ allowed-tools:
   - Bash(cargo fmt:*)
   - Bash(cargo clippy:*)
   - Bash(cargo test:*)
-disallowed-tools:
-  - AskUserQuestion
 # model: haiku — 会話中で既に固まった内容を Conventional Commits 形式に整形する
 #                 頻出・低リスクな作業のため、高速・低コストな haiku で十分
 model: haiku

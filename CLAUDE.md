@@ -16,7 +16,7 @@ git-notes はファイル種別に紐付かないため無条件読み込み)。
 1つの論理的変更 = 1つの jj change。作業の区切りごとに:
 
 1. `jj diff` で変更を確認(複数の論理単位が混ざっていたら `jj split`)
-2. 品質ゲートを通す: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`
+2. Rust コードを含む変更では品質ゲートを通す: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`
 3. `/jj-commit` スキルに従って `jj desc` で description を記述
 4. `jj new` で次の変更を開始
 
@@ -39,7 +39,7 @@ scope: core / frontend-openapi / dsl / gen / verify / cli / product-design 等
 
 ## Rust 品質基準
 
-- `cargo fmt` + `cargo clippy -- -D warnings` は常時クリーン(編集時に hook が自動検査)
+- `cargo fmt` + `cargo clippy --all-targets -- -D warnings` は常時クリーン(編集時に hook が自動検査)
 - ライブラリコードで `unwrap()` / `expect()` 禁止。`Result` + `thiserror` を使う
 - 不正状態を型で排除する(状態遷移は enum = 余積、網羅的 match を強制)
 - 公開 API には `///` ドキュメントコメントと `# Errors` セクション

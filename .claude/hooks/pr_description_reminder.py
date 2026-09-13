@@ -9,11 +9,26 @@
 """
 import json
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 
-BOOKMARK_FLAG = re.compile(r"--bookmark[= ]+(\S+)")
+PUSHED_BOOKMARK = re.compile(r"bookmark:\s+([^\s\\\"']+)")
+
+
+def explicit_bookmarks(command: str) -> list[str]:
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return []
+    bookmarks = []
+    for index, token in enumerate(tokens):
+        if token in {"--bookmark", "-b"} and index + 1 < len(tokens):
+            bookmarks.append(tokens[index + 1])
+        elif token.startswith("--bookmark="):
+            bookmarks.append(token.split("=", 1)[1])
+    return bookmarks
 
 
 def run(args: list[str]) -> subprocess.CompletedProcess:
@@ -34,7 +49,11 @@ def main() -> int:
     if not shutil.which("gh"):
         return 0
 
-    bookmarks = BOOKMARK_FLAG.findall(command)
+    bookmarks = explicit_bookmarks(command)
+    if not bookmarks:
+        tool_response = payload.get("tool_response", "")
+        response = tool_response if isinstance(tool_response, str) else json.dumps(tool_response, ensure_ascii=False)
+        bookmarks = PUSHED_BOOKMARK.findall(response)
     if not bookmarks:
         return 0
 

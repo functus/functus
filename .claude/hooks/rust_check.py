@@ -24,10 +24,14 @@ def main() -> int:
     if not os.path.isfile(os.path.join(root, "Cargo.toml")):
         return 0
 
-    # 1) rustfmt: 自動整形(失敗しても続行)
-    subprocess.run(
-        ["cargo", "fmt", "--quiet"], cwd=root, capture_output=True, check=False
+    # 1) rustfmt: 自動整形
+    fmt_result = subprocess.run(
+        ["cargo", "fmt", "--quiet"], cwd=root, capture_output=True, text=True, check=False
     )
+    if fmt_result.returncode != 0:
+        print("cargo fmt が失敗しました。修正してください:", file=sys.stderr)
+        print(fmt_result.stderr[:4000], file=sys.stderr)
+        return 2
 
     # 2) clippy: 警告をエラー扱いで検査
     result = subprocess.run(

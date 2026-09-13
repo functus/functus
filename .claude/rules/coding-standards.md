@@ -11,7 +11,7 @@ paths:
 - ライブラリコード(cli 以外)で `unwrap()` / `expect()` / `panic!` 禁止。`Result` で返す
 - エラー型はクレートごとに `thiserror` で定義し、呼び出し側が `match` で分岐可能にする
 - `Box<dyn Error>` / `anyhow` はライブラリの公開 API では使わない(cli の main 層のみ `anyhow` 可)
-- 診断は「どこが・なぜ不正か」を位置情報(span)付きで説明する(docs/DESIGN.md の診断方針)
+- 診断は「どこが・なぜ不正か」を位置情報(span)付きで説明する
 
 ## 型設計
 
