@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["crates/functus-core"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/functus/functus"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+thiserror = "1"
