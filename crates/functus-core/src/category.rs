@@ -74,6 +74,21 @@ pub enum CategoryError {
         /// `g` の効果。
         g_effects: EffectStack,
     },
+
+    /// `LawChecker::check_coproduct_coverage` に渡された対象が余積ではない。
+    #[error("対象 `{0}` は余積ではない")]
+    NotACoproduct(ObjectId),
+
+    /// 余積の一部のバリアントを消費する射が1つも登録されていない。
+    #[error(
+        "余積 `{coproduct}` の次のバリアントを処理する射が登録されていない: {missing_variants:?}"
+    )]
+    UnhandledCoproductVariants {
+        /// 検証対象の余積。
+        coproduct: ObjectId,
+        /// 処理する射が見つからなかったバリアント名。
+        missing_variants: Vec<String>,
+    },
 }
 
 /// 対象と射の集まり。合成は既存の射から新しい射を導出し、圏に登録する。
@@ -130,6 +145,11 @@ impl Category {
     /// 登録済みの射を参照する。
     pub fn morphism(&self, id: &MorphismId) -> Option<&Morphism> {
         self.morphisms.get(id)
+    }
+
+    /// 登録済みの射をすべて走査する。`LawChecker` の網羅性チェックで使う。
+    pub fn morphisms(&self) -> impl Iterator<Item = &Morphism> {
+        self.morphisms.values()
     }
 
     /// フロントエンド・DSL 由来の、効果を持たない基本射を登録する。
@@ -214,17 +234,9 @@ impl Category {
     ///
     /// `f` / `g` が未登録の場合、または `f` の余域と `g` の域が一致しない場合に失敗する。
     pub fn compose(&mut self, f: &MorphismId, g: &MorphismId) -> Result<MorphismId, CategoryError> {
+        crate::law_checker::LawChecker::check_composable(self, f, g)?;
         let f_morphism = self.require_morphism(f)?;
         let g_morphism = self.require_morphism(g)?;
-
-        if f_morphism.cod != g_morphism.dom {
-            return Err(CategoryError::DomCodMismatch {
-                f: f.clone(),
-                f_cod: f_morphism.cod.clone(),
-                g: g.clone(),
-                g_dom: g_morphism.dom.clone(),
-            });
-        }
 
         if matches!(f, MorphismId::Identity(_)) {
             return Ok(g.clone());
