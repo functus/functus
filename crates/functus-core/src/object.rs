@@ -1,14 +1,18 @@
 //! 圏の対象 (Object)。データ型・API スキーマ・UI 状態を表す。
 
+use std::fmt;
+
 /// 対象を一意に識別する ID。
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ObjectId(pub String);
 
 impl ObjectId {
+    /// 対象 ID を作る。
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
     }
 
+    /// 対象 ID を文字列スライスとして取得する。
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -20,8 +24,14 @@ impl From<&str> for ObjectId {
     }
 }
 
+impl fmt::Display for ObjectId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// 対象の構造。積 (構造体) と余積 (タグ付きユニオン) を表現する。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ObjectKind {
     /// これ以上分解しないスカラー型 (文字列・数値・UUID 等)。
     Scalar,
@@ -32,13 +42,16 @@ pub enum ObjectKind {
 }
 
 /// 圏の対象。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Object {
+    /// この対象の ID。
     pub id: ObjectId,
+    /// この対象の構造。
     pub kind: ObjectKind,
 }
 
 impl Object {
+    /// スカラー対象を作る。
     pub fn scalar(id: impl Into<String>) -> Self {
         Self {
             id: ObjectId::new(id),
@@ -46,6 +59,8 @@ impl Object {
         }
     }
 
+    /// 積(構造体)対象を作る。`fields` の各要素が参照する対象は、
+    /// `Category::add_object` の時点で登録済みである必要がある。
     pub fn product(id: impl Into<String>, fields: Vec<(String, ObjectId)>) -> Self {
         Self {
             id: ObjectId::new(id),
@@ -53,6 +68,8 @@ impl Object {
         }
     }
 
+    /// 余積(タグ付きユニオン)対象を作る。`variants` の各要素が参照する対象は、
+    /// `Category::add_object` の時点で登録済みである必要がある。
     pub fn coproduct(id: impl Into<String>, variants: Vec<(String, ObjectId)>) -> Self {
         Self {
             id: ObjectId::new(id),

@@ -11,6 +11,7 @@ repository = "https://github.com/functus/functus"
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
+proptest = "1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
