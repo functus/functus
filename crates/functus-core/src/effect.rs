@@ -61,6 +61,7 @@ impl EffectStack {
 
 impl fmt::Display for EffectStack {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // 診断メッセージでは成功時の値の対象が分からないため、`_` をプレースホルダとして使う。
         write!(f, "{}", self.render(&ObjectId::new("_")))
     }
 }

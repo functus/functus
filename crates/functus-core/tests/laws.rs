@@ -1,7 +1,7 @@
 //! 圏論的法則のテスト。issue #14 のゴール
 //! 「単体テストで合成の結合律・単位律が検証されること」に対応する。
 
-use functus_core::{Category, CategoryError, MorphismId, Object};
+use functus_core::{Category, CategoryError, Effect, EffectStack, MorphismId, Object};
 use proptest::prelude::*;
 
 fn chain_category() -> Result<(Category, MorphismId, MorphismId, MorphismId), CategoryError> {
@@ -67,6 +67,80 @@ fn identity_is_left_and_right_unit() -> Result<(), CategoryError> {
 
     assert_eq!(left_unit, f, "id_A ; f は f と同じ射であるべき");
     assert_eq!(right_unit, f, "f ; id_B は f と同じ射であるべき");
+    Ok(())
+}
+
+/// 恒等射との合成は ID だけでなく効果も保存しなければならない。
+/// `compose` の恒等射ショートカットは `merge_effects` より手前にあるため、
+/// この性質は実装の配置に依存せず常に成り立つべき単位律の一部として固定する。
+#[test]
+fn identity_composition_preserves_effects() -> Result<(), CategoryError> {
+    let mut category = Category::new();
+    let a = category.add_object(Object::scalar("A"))?;
+    let b = category.add_object(Object::scalar("B"))?;
+    let err = category.add_object(Object::scalar("Err"))?;
+    let effects = EffectStack::wrapping(vec![Effect::Fallible { error: err }]);
+    let f =
+        category.add_effectful_primitive_morphism("f", a.clone(), b.clone(), effects.clone())?;
+
+    let id_a = category.identity(&a)?;
+    let id_b = category.identity(&b)?;
+
+    let left_unit = category.compose(&id_a, &f)?;
+    let right_unit = category.compose(&f, &id_b)?;
+
+    assert_eq!(category.morphism(&left_unit).unwrap().effects, effects);
+    assert_eq!(category.morphism(&right_unit).unwrap().effects, effects);
+    Ok(())
+}
+
+/// `EffectStack::pure()` は効果合成の両側単位元である。
+#[test]
+fn pure_effects_are_the_unit_of_composition() -> Result<(), CategoryError> {
+    let mut category = Category::new();
+    let a = category.add_object(Object::scalar("A"))?;
+    let b = category.add_object(Object::scalar("B"))?;
+    let c = category.add_object(Object::scalar("C"))?;
+    let effects = EffectStack::wrapping(vec![Effect::Async]);
+
+    let f = category.add_effectful_primitive_morphism("f", a, b.clone(), effects.clone())?;
+    let g = category.add_primitive_morphism("g", b, c)?;
+
+    let fg = category.compose(&f, &g)?;
+    assert_eq!(
+        category.morphism(&fg).unwrap().effects,
+        effects,
+        "純粋な射との合成は相手の効果をそのまま保存するべき"
+    );
+    Ok(())
+}
+
+/// 効果の合成は結合律を満たす: 純粋な射と効果付きの射が混在する鎖でも、
+/// (f;g);h と f;(g;h) は同じ効果に落ち着く。
+#[test]
+fn effect_merge_is_associative_across_a_mixed_chain() -> Result<(), CategoryError> {
+    let mut category = Category::new();
+    let a = category.add_object(Object::scalar("A"))?;
+    let b = category.add_object(Object::scalar("B"))?;
+    let c = category.add_object(Object::scalar("C"))?;
+    let d = category.add_object(Object::scalar("D"))?;
+    let err = category.add_object(Object::scalar("Err"))?;
+
+    let effects = EffectStack::wrapping(vec![Effect::Async, Effect::Fallible { error: err }]);
+    // f だけが効果を持ち、g・h は純粋。単位元(EffectStack::pure())を挟んでも
+    // 結合の仕方によらず同じ効果に落ち着くことを確認する。
+    let f = category.add_effectful_primitive_morphism("f", a, b.clone(), effects.clone())?;
+    let g = category.add_primitive_morphism("g", b, c.clone())?;
+    let h = category.add_primitive_morphism("h", c, d)?;
+
+    let fg = category.compose(&f, &g)?;
+    let left = category.compose(&fg, &h)?;
+
+    let gh = category.compose(&g, &h)?;
+    let right = category.compose(&f, &gh)?;
+
+    assert_eq!(category.morphism(&left).unwrap().effects, effects);
+    assert_eq!(category.morphism(&right).unwrap().effects, effects);
     Ok(())
 }
 
