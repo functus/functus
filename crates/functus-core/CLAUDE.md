@@ -6,8 +6,9 @@
 
 - `object.rs`: `Object` / `ObjectKind` (Scalar / Product / Coproduct)
 - `morphism.rs`: `Morphism` / `MorphismId` (Named / Identity / Composed)
+- `effect.rs`: `Effect` / `EffectStack` (Async / Fallible のモナドスタック)
 - `category.rs`: `Category` (合成 `compose` と型整合チェック)
-- 効果モナド (`Effect`) は #15、`LawChecker` は #16 で追加する
+- `LawChecker` は #16 で追加する
 
 ## 設計判断
 
@@ -21,3 +22,10 @@
   ここで緩めず `LawChecker` (#16) 側の検証責務として扱う。
 - **`compose(f, g)` は図式順。** `f` を先に適用する。数学的な `f∘g` ではなく `g∘f` に相当するため、
   DESIGN.md の関手法則の記法と読み合わせる際は順序の向きに注意する。
+- **効果は `Morphism.cod` を包むメタデータとして持つ。** `Morphism` は独立した「効果付き射」型を
+  持たず、`effects: EffectStack` フィールドで `cod` をどう包むかを表現する
+  (`effects.render(&cod)` が実際の返り値の型表記になる)。`compose` の効果合成規則は、
+  一方が純粋なら他方の効果をそのまま採用し、両方が効果を持つ場合は同一のスタックなら
+  そのまま採用、異なるスタックは `CategoryError::IncompatibleEffects` で拒否する。
+  これは Kleisli 圏での bind が同一モナドの下でのみ定義される制約を反映したもので、
+  異なるモナドを跨ぐ合成(lift)は Phase1 のスコープ外として意図的に未対応にしている。

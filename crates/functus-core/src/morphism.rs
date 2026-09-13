@@ -2,6 +2,7 @@
 
 use std::fmt;
 
+use crate::effect::EffectStack;
 use crate::object::ObjectId;
 
 /// 射を一意に識別する ID。
@@ -61,6 +62,9 @@ pub struct Morphism {
     pub id: MorphismId,
     /// 域(この射の入力側の対象)。
     pub dom: ObjectId,
-    /// 余域(この射の出力側の対象)。
+    /// 余域(この射の出力側の対象)。`effects` が空でない場合、実際の返り値の
+    /// 型は `effects.render(&cod)` になる。
     pub cod: ObjectId,
+    /// `cod` に付与された効果の積み重ね。純粋な射は `EffectStack::pure()`。
+    pub effects: EffectStack,
 }
