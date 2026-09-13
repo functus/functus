@@ -1,0 +1,1 @@
+- [射 ID のキー空間の衝突](project_morphism_id_namespace.md) — 導出 ID とユーザー定義 ID が同居し、圏の法則が黙って破れる。Category を触る変更で必ず確認する

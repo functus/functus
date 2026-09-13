@@ -3,11 +3,18 @@ resolver = "2"
 members = ["crates/functus-core"]
 
 [workspace.package]
+version = "0.1.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/functus/functus"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
-serde_yaml = "0.9"
-thiserror = "1"
+thiserror = "2"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
