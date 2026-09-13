@@ -3,14 +3,19 @@
 use std::collections::HashSet;
 
 use openapiv3::{
-    ObjectType, OpenAPI, ReferenceOr, Schema, SchemaKind, Type, VariantOrUnknownOrEmpty,
+    AdditionalProperties, ObjectType, OpenAPI, ReferenceOr, Schema, SchemaKind, StringFormat, Type,
+    VariantOrUnknownOrEmpty,
 };
 
-use functus_core::{Category, Object, ObjectId};
+use functus_core::{Category, Object, ObjectId, ObjectKind};
 
 use crate::error::FrontendError;
 
 const SCHEMA_REF_PREFIX: &str = "#/components/schemas/";
+
+/// Phase1 のフロントエンドが予約しているスカラー名。`components.schemas` に
+/// 同名の対象を定義することは許さない。
+const RESERVED_SCALAR_NAMES: [&str; 6] = ["String", "Uuid", "Integer", "Number", "Boolean", "Unit"];
 
 /// `components.schemas` のすべての名前付きスキーマを対象として登録する。
 ///
@@ -35,6 +40,9 @@ pub(crate) fn register_named_schemas(
 
     let mut pending = Vec::with_capacity(components.schemas.len());
     for (name, schema_or_ref) in &components.schemas {
+        if RESERVED_SCALAR_NAMES.contains(&name.as_str()) {
+            return Err(FrontendError::ScalarNameCollision { name: name.clone() });
+        }
         match schema_or_ref {
             ReferenceOr::Reference { reference } => {
                 return Err(FrontendError::UnsupportedReference {
@@ -91,12 +99,25 @@ fn require_object_type<'a>(
     name: &str,
     schema: &'a Schema,
 ) -> Result<&'a ObjectType, FrontendError> {
+    if schema.schema_data.nullable {
+        return Err(FrontendError::UnsupportedSchema {
+            schema: name.to_string(),
+            reason: "nullable: true は Phase1 で未対応(IRにnull許容の表現が無い)".to_string(),
+        });
+    }
     let SchemaKind::Type(Type::Object(object_type)) = &schema.schema_kind else {
         return Err(FrontendError::UnsupportedSchema {
             schema: name.to_string(),
             reason: "type: object 以外のトップレベルスキーマは Phase1 で未対応".to_string(),
         });
     };
+    if let Some(AdditionalProperties::Schema(_)) = &object_type.additional_properties {
+        return Err(FrontendError::UnsupportedSchema {
+            schema: name.to_string(),
+            reason: "additionalProperties に型付きスキーマを持つ辞書型は Phase1 で未対応"
+                .to_string(),
+        });
+    }
     Ok(object_type)
 }
 
@@ -111,9 +132,11 @@ fn first_unregistered_dependency(
         let ReferenceOr::Reference { reference } = property else {
             return None;
         };
-        let name = reference.strip_prefix(SCHEMA_REF_PREFIX)?;
-        if known_names.contains(name) && category.object(&ObjectId::from(name)).is_none() {
-            Some(name.to_string())
+        let name = schema_ref_name(reference)?;
+        if known_names.contains(name.as_str())
+            && category.object(&ObjectId::from(name.as_str())).is_none()
+        {
+            Some(name)
         } else {
             None
         }
@@ -149,9 +172,20 @@ pub(crate) fn resolve_schema(
     }
 }
 
+/// `$ref` 文字列から `#/components/schemas/` を取り除き、JSON Pointer の
+/// エスケープ(`~1` → `/`、`~0` → `~`)を復号したスキーマ名を返す。
+///
+/// `Foo/Bar` という名前のスキーマは `$ref: "#/components/schemas/Foo~1Bar"` の
+/// ように参照される。復号せずに `strip_prefix` の結果をそのまま `ObjectId` に
+/// すると、実在するスキーマなのに未登録として扱われてしまう。
+fn schema_ref_name(reference: &str) -> Option<String> {
+    let escaped = reference.strip_prefix(SCHEMA_REF_PREFIX)?;
+    Some(escaped.replace("~1", "/").replace("~0", "~"))
+}
+
 fn resolve_schema_ref(context: String, reference: &str) -> Result<ObjectId, FrontendError> {
-    match reference.strip_prefix(SCHEMA_REF_PREFIX) {
-        Some(name) if !name.is_empty() => Ok(ObjectId::from(name)),
+    match schema_ref_name(reference) {
+        Some(name) if !name.is_empty() => Ok(ObjectId::from(name.as_str())),
         _ => Err(FrontendError::UnsupportedReference {
             context,
             reference: reference.to_string(),
@@ -164,6 +198,15 @@ fn resolve_inline_scalar(
     context: &str,
     schema: &Schema,
 ) -> Result<ObjectId, FrontendError> {
+    if schema.schema_data.nullable {
+        // functus-core の ObjectKind には「null を許容する」表現が無いため、
+        // 非null型として黙って扱うと実際には null が来るケースを取りこぼす。
+        return Err(FrontendError::UnsupportedSchema {
+            schema: context.to_string(),
+            reason: "nullable: true は Phase1 で未対応(IRにnull許容の表現が無い)".to_string(),
+        });
+    }
+
     let SchemaKind::Type(ty) = &schema.schema_kind else {
         return Err(FrontendError::UnsupportedSchema {
             schema: context.to_string(),
@@ -174,7 +217,17 @@ fn resolve_inline_scalar(
     let scalar_name = match ty {
         Type::String(string_type) => match &string_type.format {
             VariantOrUnknownOrEmpty::Unknown(format) if format == "uuid" => "Uuid",
-            _ => "String",
+            VariantOrUnknownOrEmpty::Unknown(_) | VariantOrUnknownOrEmpty::Empty => "String",
+            // Phase1 では date/date-time/password/byte/binary もすべて String に
+            // 収束させる(専用の対象は作らない)。この簡略化は意図的なもので、
+            // crates/functus-frontend-openapi/CLAUDE.md に記録している。
+            VariantOrUnknownOrEmpty::Item(
+                StringFormat::Date
+                | StringFormat::DateTime
+                | StringFormat::Password
+                | StringFormat::Byte
+                | StringFormat::Binary,
+            ) => "String",
         },
         Type::Integer(_) => "Integer",
         Type::Number(_) => "Number",
@@ -195,16 +248,29 @@ fn resolve_inline_scalar(
         }
     };
 
-    Ok(intern_scalar(category, scalar_name))
+    intern_scalar(category, scalar_name)
 }
 
 /// スカラー対象を(未登録なら)登録して ID を返す。同名のスカラーは複数の
 /// フィールドから共有される可能性があるため、既存なら登録し直さない。
-pub(crate) fn intern_scalar(category: &mut Category, name: &str) -> ObjectId {
+///
+/// `String`/`Uuid`/`Integer`/`Number`/`Boolean`/`Unit` は Phase1 のフロントエンドが
+/// 予約している名前である。利用者が `components.schemas` に同名の(スカラーでない)
+/// 対象を定義していた場合、型を取り違えるか意味不明な `DuplicateObject` になる前に
+/// ここで検出して拒否する。
+pub(crate) fn intern_scalar(
+    category: &mut Category,
+    name: &str,
+) -> Result<ObjectId, FrontendError> {
     let id = ObjectId::from(name);
-    if category.object(&id).is_none() {
-        // スカラー対象はフィールドを持たないため add_object は失敗しない。
-        let _ = category.add_object(Object::scalar(name));
+    match category.object(&id) {
+        None => {
+            category.add_object(Object::scalar(name))?;
+            Ok(id)
+        }
+        Some(existing) if matches!(existing.kind, ObjectKind::Scalar) => Ok(id),
+        Some(_) => Err(FrontendError::ScalarNameCollision {
+            name: name.to_string(),
+        }),
     }
-    id
 }
