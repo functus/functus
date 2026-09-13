@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::effect::{Effect, EffectStack};
 use crate::morphism::{Morphism, MorphismId};
 use crate::object::{Object, ObjectId, ObjectKind};
 
@@ -57,6 +58,21 @@ pub enum CategoryError {
         object: ObjectId,
         /// まだ登録されていない参照先。
         missing: ObjectId,
+    },
+
+    /// `compose(f, g)` で `f` と `g` の双方が異なる効果を持つ。Kleisli 圏の bind は
+    /// 同一モナドの下でのみ定義されるため、異なるモナドを跨ぐ合成(lift)なしには
+    /// 一意な効果を決定できない。
+    #[error("合成できない: `{f}` の効果 `{f_effects}` と `{g}` の効果 `{g_effects}` が異なる")]
+    IncompatibleEffects {
+        /// 合成の左側の射。
+        f: MorphismId,
+        /// `f` の効果。
+        f_effects: EffectStack,
+        /// 合成の右側の射。
+        g: MorphismId,
+        /// `g` の効果。
+        g_effects: EffectStack,
     },
 }
 
@@ -116,7 +132,8 @@ impl Category {
         self.morphisms.get(id)
     }
 
-    /// フロントエンド・DSL 由来の基本射を登録する。`dom` / `cod` は事前に `add_object` 済みであること。
+    /// フロントエンド・DSL 由来の、効果を持たない基本射を登録する。
+    /// `dom` / `cod` は事前に `add_object` 済みであること。
     ///
     /// # Errors
     ///
@@ -127,8 +144,29 @@ impl Category {
         dom: ObjectId,
         cod: ObjectId,
     ) -> Result<MorphismId, CategoryError> {
+        self.add_effectful_primitive_morphism(id, dom, cod, EffectStack::pure())
+    }
+
+    /// フロントエンド・DSL 由来の基本射を、`cod` に付与する効果とともに登録する。
+    /// `dom` / `cod` は事前に `add_object` 済みであること。
+    ///
+    /// # Errors
+    ///
+    /// `dom` / `cod` が未登録の場合、または同じ ID の射がすでに登録されている場合に失敗する。
+    pub fn add_effectful_primitive_morphism(
+        &mut self,
+        id: impl Into<String>,
+        dom: ObjectId,
+        cod: ObjectId,
+        effects: EffectStack,
+    ) -> Result<MorphismId, CategoryError> {
         self.require_object(&dom)?;
         self.require_object(&cod)?;
+        for effect in effects.layers() {
+            if let Effect::Fallible { error } = effect {
+                self.require_object(error)?;
+            }
+        }
         let id = MorphismId::named(id);
         if self.morphisms.contains_key(&id) {
             return Err(CategoryError::DuplicateMorphism(id));
@@ -139,6 +177,7 @@ impl Category {
                 id: id.clone(),
                 dom,
                 cod,
+                effects,
             },
         );
         Ok(id)
@@ -158,6 +197,7 @@ impl Category {
                 id: id.clone(),
                 dom: obj.clone(),
                 cod: obj.clone(),
+                effects: EffectStack::pure(),
             });
         Ok(id)
     }
@@ -193,6 +233,7 @@ impl Category {
             return Ok(f.clone());
         }
 
+        let effects = merge_effects(f, &f_morphism.effects, g, &g_morphism.effects)?;
         let dom = f_morphism.dom.clone();
         let cod = g_morphism.cod.clone();
 
@@ -207,6 +248,7 @@ impl Category {
                 id: id.clone(),
                 dom,
                 cod,
+                effects,
             });
         Ok(id)
     }
@@ -226,6 +268,32 @@ impl Category {
     }
 }
 
+/// `compose(f, g)` の効果の合成規則。
+///
+/// 純粋な射(効果なし)は相手の効果をそのまま通す。両方が効果を持つ場合は、
+/// 同じモナドスタックであれば(bind によって単一の層に潰れるはずなので)
+/// そのまま採用し、異なるスタックを持つ場合は自動では決定できないため
+/// エラーにする。
+fn merge_effects(
+    f: &MorphismId,
+    f_effects: &EffectStack,
+    g: &MorphismId,
+    g_effects: &EffectStack,
+) -> Result<EffectStack, CategoryError> {
+    if f_effects.is_pure() {
+        Ok(g_effects.clone())
+    } else if g_effects.is_pure() || f_effects == g_effects {
+        Ok(f_effects.clone())
+    } else {
+        Err(CategoryError::IncompatibleEffects {
+            f: f.clone(),
+            f_effects: f_effects.clone(),
+            g: g.clone(),
+            g_effects: g_effects.clone(),
+        })
+    }
+}
+
 fn extend_with_parts(parts: &mut Vec<MorphismId>, id: &MorphismId) {
     match id {
         MorphismId::Composed(existing) => parts.extend(existing.iter().cloned()),
@@ -236,6 +304,7 @@ fn extend_with_parts(parts: &mut Vec<MorphismId>, id: &MorphismId) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::effect::Effect;
 
     fn sample_category() -> (Category, ObjectId, ObjectId) {
         let mut category = Category::new();
@@ -386,5 +455,110 @@ mod tests {
         let f = category.add_primitive_morphism("f", p.clone(), q).unwrap();
         let id_p = category.identity(&p).unwrap();
         assert_eq!(category.compose(&id_p, &f).unwrap(), f);
+    }
+
+    /// issue #15 のゴール: `GET /users/{id}` が
+    /// `UserId -> Async<Result<User, ApiError>>` として IR 上で表現できること。
+    #[test]
+    fn effectful_primitive_morphism_renders_as_async_result() {
+        let mut category = Category::new();
+        let user_id = category.add_object(Object::scalar("UserId")).unwrap();
+        let user = category.add_object(Object::scalar("User")).unwrap();
+        let api_error = category.add_object(Object::scalar("ApiError")).unwrap();
+
+        let get_user = category
+            .add_effectful_primitive_morphism(
+                "getUser",
+                user_id.clone(),
+                user.clone(),
+                EffectStack::wrapping(vec![
+                    Effect::Async,
+                    Effect::Fallible {
+                        error: api_error.clone(),
+                    },
+                ]),
+            )
+            .unwrap();
+
+        let morphism = category.morphism(&get_user).unwrap();
+        // IR の構造そのもの(域・余域・効果の層)を検証する。書式(render の出力文字列)は
+        // effect.rs の render_nests_outer_to_inner が別途担当する。
+        assert_eq!(morphism.dom, user_id);
+        assert_eq!(morphism.cod, user);
+        assert_eq!(
+            morphism.effects.layers(),
+            &[Effect::Async, Effect::Fallible { error: api_error }]
+        );
+        assert_eq!(
+            morphism.effects.render(&morphism.cod),
+            "Async<Result<User, ApiError>>"
+        );
+    }
+
+    /// Codex が指摘した回帰: `Fallible` のエラー対象は `dom`/`cod` と同様に
+    /// 未登録なら拒否されなければならない。放置すると、後段のジェネレータが
+    /// 解決できない対象を参照する不正な IR が組み立てられてしまう。
+    #[test]
+    fn add_effectful_primitive_morphism_rejects_unregistered_error_object() {
+        let mut category = Category::new();
+        let a = category.add_object(Object::scalar("A")).unwrap();
+        let b = category.add_object(Object::scalar("B")).unwrap();
+        let err = category
+            .add_effectful_primitive_morphism(
+                "f",
+                a,
+                b,
+                EffectStack::wrapping(vec![Effect::Fallible {
+                    error: ObjectId::from("Missing"),
+                }]),
+            )
+            .unwrap_err();
+        assert_eq!(err, CategoryError::UnknownObject(ObjectId::from("Missing")));
+    }
+
+    #[test]
+    fn compose_with_a_pure_morphism_preserves_the_other_sides_effects() {
+        let mut category = Category::new();
+        let a = category.add_object(Object::scalar("A")).unwrap();
+        let b = category.add_object(Object::scalar("B")).unwrap();
+        let c = category.add_object(Object::scalar("C")).unwrap();
+
+        let effects = EffectStack::wrapping(vec![Effect::Async]);
+        let f = category
+            .add_effectful_primitive_morphism("f", a, b.clone(), effects.clone())
+            .unwrap();
+        let g = category.add_primitive_morphism("g", b, c).unwrap();
+
+        let fg = category.compose(&f, &g).unwrap();
+        assert_eq!(category.morphism(&fg).unwrap().effects, effects);
+    }
+
+    #[test]
+    fn compose_rejects_incompatible_effects() {
+        let mut category = Category::new();
+        let a = category.add_object(Object::scalar("A")).unwrap();
+        let b = category.add_object(Object::scalar("B")).unwrap();
+        let c = category.add_object(Object::scalar("C")).unwrap();
+        let err = category.add_object(Object::scalar("Err")).unwrap();
+
+        let f = category
+            .add_effectful_primitive_morphism(
+                "f",
+                a,
+                b.clone(),
+                EffectStack::wrapping(vec![Effect::Async]),
+            )
+            .unwrap();
+        let g = category
+            .add_effectful_primitive_morphism(
+                "g",
+                b,
+                c,
+                EffectStack::wrapping(vec![Effect::Fallible { error: err }]),
+            )
+            .unwrap();
+
+        let err = category.compose(&f, &g).unwrap_err();
+        assert!(matches!(err, CategoryError::IncompatibleEffects { .. }));
     }
 }
