@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/functus-core"]
+members = ["crates/functus-core", "crates/functus-frontend-openapi"]
 
 [workspace.package]
 version = "0.1.0"
@@ -9,7 +9,10 @@ license = "MIT"
 repository = "https://github.com/functus/functus"
 
 [workspace.dependencies]
+functus-core = { path = "crates/functus-core" }
 serde = { version = "1", features = ["derive"] }
+serde_norway = "0.9"
+openapiv3 = "2"
 thiserror = "2"
 proptest = "1"
 
