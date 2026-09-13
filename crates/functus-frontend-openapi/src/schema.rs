@@ -3,14 +3,19 @@
 use std::collections::HashSet;
 
 use openapiv3::{
-    ObjectType, OpenAPI, ReferenceOr, Schema, SchemaKind, Type, VariantOrUnknownOrEmpty,
+    ObjectType, OpenAPI, ReferenceOr, Schema, SchemaKind, StringFormat, Type,
+    VariantOrUnknownOrEmpty,
 };
 
-use functus_core::{Category, Object, ObjectId};
+use functus_core::{Category, Object, ObjectId, ObjectKind};
 
 use crate::error::FrontendError;
 
 const SCHEMA_REF_PREFIX: &str = "#/components/schemas/";
+
+/// Phase1 のフロントエンドが予約しているスカラー名。`components.schemas` に
+/// 同名の対象を定義することは許さない。
+const RESERVED_SCALAR_NAMES: [&str; 6] = ["String", "Uuid", "Integer", "Number", "Boolean", "Unit"];
 
 /// `components.schemas` のすべての名前付きスキーマを対象として登録する。
 ///
@@ -35,6 +40,9 @@ pub(crate) fn register_named_schemas(
 
     let mut pending = Vec::with_capacity(components.schemas.len());
     for (name, schema_or_ref) in &components.schemas {
+        if RESERVED_SCALAR_NAMES.contains(&name.as_str()) {
+            return Err(FrontendError::ScalarNameCollision { name: name.clone() });
+        }
         match schema_or_ref {
             ReferenceOr::Reference { reference } => {
                 return Err(FrontendError::UnsupportedReference {
@@ -174,7 +182,17 @@ fn resolve_inline_scalar(
     let scalar_name = match ty {
         Type::String(string_type) => match &string_type.format {
             VariantOrUnknownOrEmpty::Unknown(format) if format == "uuid" => "Uuid",
-            _ => "String",
+            VariantOrUnknownOrEmpty::Unknown(_) | VariantOrUnknownOrEmpty::Empty => "String",
+            // Phase1 では date/date-time/password/byte/binary もすべて String に
+            // 収束させる(専用の対象は作らない)。この簡略化は意図的なもので、
+            // crates/functus-frontend-openapi/CLAUDE.md に記録している。
+            VariantOrUnknownOrEmpty::Item(
+                StringFormat::Date
+                | StringFormat::DateTime
+                | StringFormat::Password
+                | StringFormat::Byte
+                | StringFormat::Binary,
+            ) => "String",
         },
         Type::Integer(_) => "Integer",
         Type::Number(_) => "Number",
@@ -195,16 +213,29 @@ fn resolve_inline_scalar(
         }
     };
 
-    Ok(intern_scalar(category, scalar_name))
+    intern_scalar(category, scalar_name)
 }
 
 /// スカラー対象を(未登録なら)登録して ID を返す。同名のスカラーは複数の
 /// フィールドから共有される可能性があるため、既存なら登録し直さない。
-pub(crate) fn intern_scalar(category: &mut Category, name: &str) -> ObjectId {
+///
+/// `String`/`Uuid`/`Integer`/`Number`/`Boolean`/`Unit` は Phase1 のフロントエンドが
+/// 予約している名前である。利用者が `components.schemas` に同名の(スカラーでない)
+/// 対象を定義していた場合、型を取り違えるか意味不明な `DuplicateObject` になる前に
+/// ここで検出して拒否する。
+pub(crate) fn intern_scalar(
+    category: &mut Category,
+    name: &str,
+) -> Result<ObjectId, FrontendError> {
     let id = ObjectId::from(name);
-    if category.object(&id).is_none() {
-        // スカラー対象はフィールドを持たないため add_object は失敗しない。
-        let _ = category.add_object(Object::scalar(name));
+    match category.object(&id) {
+        None => {
+            category.add_object(Object::scalar(name))?;
+            Ok(id)
+        }
+        Some(existing) if matches!(existing.kind, ObjectKind::Scalar) => Ok(id),
+        Some(_) => Err(FrontendError::ScalarNameCollision {
+            name: name.to_string(),
+        }),
     }
-    id
 }
